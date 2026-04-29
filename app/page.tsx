@@ -22,6 +22,7 @@ type UserStats = {
 export default function Home() {
   // --- ESTADOS ---
   const [loading, setLoading] = useState(true);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [gameData, setGameData] = useState<GameData | null>(null);
   const [solution, setSolution] = useState<Solution | null>(null);
   
@@ -48,6 +49,11 @@ export default function Home() {
     fetch("/api/game")
       .then((res) => res.json())
       .then((data) => {
+        if (!data || data.error) {
+          setErrorMsg(data?.error || 'Error cargando partida');
+          setLoading(false);
+          return;
+        }
         setGameData(data.gameData);
         setSolution(data.solution);
 
@@ -73,7 +79,11 @@ export default function Home() {
         }
         setLoading(false);
       })
-      .catch((err) => console.error("Error cargando:", err));
+      .catch((err) => {
+        console.error("Error cargando:", err);
+        setErrorMsg('No se pudo cargar la partida. Usando fallback si está disponible.');
+        setLoading(false);
+      });
   }, []);
 
   // --- 2. GUARDAR ESTADO PROGRESIVO (Para que no pierda intentos al recargar) ---
@@ -214,12 +224,21 @@ export default function Home() {
             <div className="flex-shrink-0">
                 <button 
                     onClick={handlePlay} 
-                    disabled={isPlaying || gameStatus !== "playing"} 
+                    disabled={isPlaying || gameStatus !== "playing" || !gameData?.previewUrl} 
                     className="w-16 h-16 bg-gradient-to-br from-pink-500 to-rose-600 rounded-full flex items-center justify-center transition-all hover:scale-105 active:scale-95 disabled:opacity-50 disabled:grayscale shadow-lg shadow-pink-500/40 border border-white/20 group"
                 >
                   {isPlaying ? <Pause size={28} fill="white" /> : <Play size={28} fill="white" className="ml-1 group-hover:animate-pulse" />}
                 </button>
             </div>
+
+            {/* Banner de error si hubo problemas cargando la partida */}
+            {errorMsg && (
+              <div className="absolute top-0 left-0 right-0 mt-20 px-4">
+                <div className="bg-red-600 text-white text-sm p-2 rounded shadow">
+                  {errorMsg}
+                </div>
+              </div>
+            )}
 
             <div className="flex flex-col ml-5 flex-grow overflow-hidden justify-center">
                 <div className="text-xl font-mono font-bold text-white/90 tracking-[0.15em] truncate drop-shadow-md">

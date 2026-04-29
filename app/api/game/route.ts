@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { ARTISTS } from '@/data/artist';
+import { FALLBACK_SONGS } from '@/data/fallbackPool';
 
 interface DeezerSong {
   id: number;
@@ -25,6 +26,9 @@ function getSeededIndex(seed: string, max: number) {
   return Math.abs(hash) % max;
 }
 
+// Simple in-memory cache for the daily response (keyed by date)
+const gameCache = new Map<string, { expires: number; payload: any }>();
+
 export async function GET() {
   try {
     // 1. OBTENER FECHA ACTUAL (Zona Horaria Argentina)
@@ -42,6 +46,12 @@ export async function GET() {
     const artistIndex = getSeededIndex(argentinaTime, ARTISTS.length);
     const dailyArtist = ARTISTS[artistIndex];
 
+    // If we already have a cached payload for today, return it
+    const cached = gameCache.get(argentinaTime);
+    if (cached && cached.expires > Date.now()) {
+      return NextResponse.json(cached.payload);
+    }
+
     if (!dailyArtist) {
       return NextResponse.json({ error: "Error seleccionando artista diario" }, { status: 500 });
     }
@@ -56,45 +66,76 @@ export async function GET() {
     
     // IMPORTANTE: Agregamos cache para no reventar a Deezer si entran muchos usuarios
     // revalidate: 3600 significa que Next.js guarda la respuesta de Deezer por 1 hora.
-    const deezerResponse = await fetch(`https://api.deezer.com/search?q=${encodeURIComponent(query)}`, { next: { revalidate: 3600 } });
-    const data = await deezerResponse.json();
+    // Intentar obtener resultados desde Deezer con reintentos sencillos
+    let validSongs: DeezerSong[] = [];
+    try {
+      const deezerResponse = await fetch(`https://api.deezer.com/search?q=${encodeURIComponent(query)}`, { next: { revalidate: 3600 } });
+      const data = await deezerResponse.json();
+      validSongs = data.data?.filter((s: DeezerSong) => s.preview) || [];
 
-    // Fallback simple si falla la búsqueda estricta
-    let validSongs = data.data?.filter((s: DeezerSong) => s.preview) || [];
-
-    if (validSongs.length === 0) {
-        // Intento sin contexto
+      if (validSongs.length === 0) {
         const fallbackRes = await fetch(`https://api.deezer.com/search?q=artist:"${encodeURIComponent(dailyArtist.name)}"`, { next: { revalidate: 3600 } });
         const fallbackData = await fallbackRes.json();
         validSongs = fallbackData.data?.filter((s: DeezerSong) => s.preview) || [];
+      }
+    } catch (err) {
+      // Deezer request failed — we'll fallback below
+      console.error('Deezer error:', err);
     }
 
+    let payload: any;
+
     if (validSongs.length === 0) {
-        return NextResponse.json({ error: "Sin previews disponibles hoy" }, { status: 404 });
+      // Fallback a pool local si Deezer no devolvió previews
+      const fallbackIndex = getSeededIndex(argentinaTime + dailyArtist.name, FALLBACK_SONGS.length);
+      const fallbackSong = FALLBACK_SONGS[fallbackIndex];
+
+      payload = {
+        gameData: {
+          previewUrl: fallbackSong.previewUrl || '',
+          deezerId: fallbackSong.deezerId || 0,
+          date: argentinaTime,
+        },
+        solution: {
+          title: fallbackSong.title,
+          artist: fallbackSong.artist,
+          albumCover: fallbackSong.albumCover || '',
+          albumYear: fallbackSong.albumYear || '',
+          genre: dailyArtist.genre,
+          formationYear: dailyArtist.formationYear,
+        },
+        _note: 'fallback'
+      };
+
+      // Cache breve
+      gameCache.set(argentinaTime, { expires: Date.now() + 1000 * 60 * 60, payload });
+      return NextResponse.json(payload);
     }
 
     // 4. SELECCIONAR CANCIÓN (TAMBIÉN BASADO EN LA FECHA)
-    // Para que no elija una canción random cada vez que recargás la página,
-    // usamos la misma semilla combinada con el nombre del artista.
     const songIndex = getSeededIndex(argentinaTime + dailyArtist.name, validSongs.length);
     const song = validSongs[songIndex];
 
-    // 5. RESPONDER
-    return NextResponse.json({
+    payload = {
       gameData: {
         previewUrl: song.preview,
         deezerId: song.id,
-        date: argentinaTime, // Enviamos la fecha para que el Frontend sepa qué día es
+        date: argentinaTime,
       },
       solution: {
         title: song.title,
         artist: song.artist.name,
         albumCover: song.album.cover_medium,
         albumYear: song.album.release_date,
-        genre: dailyArtist.genre,          
-        formationYear: dailyArtist.formationYear 
+        genre: dailyArtist.genre,
+        formationYear: dailyArtist.formationYear,
       }
-    });
+    };
+
+    // Cache la respuesta del día por 1 hora
+    gameCache.set(argentinaTime, { expires: Date.now() + 1000 * 60 * 60, payload });
+
+    return NextResponse.json(payload);
 
   } catch (error) {
     console.error(error);

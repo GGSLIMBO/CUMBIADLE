@@ -1,6 +1,16 @@
 import { NextResponse } from 'next/server';
 import { ARTISTS } from '@/data/artist'; // Importamos tu lista oficial
 
+// Simple in-memory rate limiter and cache (for demo / small traffic).
+// For production en Vercel, usar Vercel Edge Config / KV or Redis.
+const RATE_LIMIT_WINDOW_MS = 60_000; // 1 min
+const RATE_LIMIT_MAX = 30; // requests per window per IP
+const rateMap = globalThis.__cumbiadle_search_rate__ ?? new Map<string, { count: number; expires: number }>();
+globalThis.__cumbiadle_search_rate__ = rateMap;
+
+const queryCache = globalThis.__cumbiadle_search_cache__ ?? new Map<string, { data: any; expires: number }>();
+globalThis.__cumbiadle_search_cache__ = queryCache;
+
 interface DeezerTrack {
   id: number;
   title: string;
@@ -22,6 +32,25 @@ export async function GET(request: Request) {
 
   if (!query || query.length < 2) {
     return NextResponse.json([]);
+  }
+
+  // Rate limiting by IP (best-effort). Use X-Forwarded-For or fallback to 'unknown'
+  const ip = request.headers.get('x-forwarded-for') || request.headers.get('x-real-ip') || 'unknown';
+  const entry = rateMap.get(ip) || { count: 0, expires: Date.now() + RATE_LIMIT_WINDOW_MS };
+  if (entry.expires < Date.now()) {
+    entry.count = 0;
+    entry.expires = Date.now() + RATE_LIMIT_WINDOW_MS;
+  }
+  entry.count += 1;
+  rateMap.set(ip, entry);
+  if (entry.count > RATE_LIMIT_MAX) {
+    return NextResponse.json({ error: 'rate_limited' }, { status: 429 });
+  }
+
+  // Query cache (short TTL)
+  const cacheEntry = queryCache.get(query.toLowerCase());
+  if (cacheEntry && cacheEntry.expires > Date.now()) {
+    return NextResponse.json(cacheEntry.data);
   }
 
   try {
@@ -54,6 +83,9 @@ export async function GET(request: Request) {
       artist: t.artist.name,
       cover: t.album.cover_small
     }));
+
+    // Cache results for 30s
+    queryCache.set(query.toLowerCase(), { data: tracks, expires: Date.now() + 30 * 1000 });
 
     return NextResponse.json(tracks);
 

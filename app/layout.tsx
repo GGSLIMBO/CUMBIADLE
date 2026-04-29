@@ -15,9 +15,5 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
-  return (
-    <html lang="es">
-      <body className={outfit.className}>{children}</body> {/* <--- USAR AQUÍ */}
-    </html>
-  );
+  return (<html lang="es"><body className={outfit.className}>{children}</body></html>);
 }
