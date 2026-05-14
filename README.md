@@ -1,5 +1,7 @@
 Cumbiadle — juego diario tipo "Wordle" basado en cumbia.
 
+-Para acceder al juego online: cumbiadle.vercel.app
+
 Resumen
 - Juego web hecho con Next.js (App Router) + TypeScript + Tailwind.
 - Cada día se selecciona una canción distinta (seed por fecha) y el jugador debe adivinarla con pistas y un preview restringido por tiempo.

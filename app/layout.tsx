@@ -1,9 +1,18 @@
 import type { Metadata } from "next";
-import { Outfit } from "next/font/google"; // <--- CAMBIAR AQUÍ
+import { Fraunces, Space_Grotesk } from "next/font/google";
 import "./globals.css";
+import { ThemeProvider } from "@/components/ThemeProvider";
 
-// Configurar Outfit
-const outfit = Outfit({ subsets: ["latin"] }); // <--- CAMBIAR AQUÍ
+const displayFont = Fraunces({
+  subsets: ["latin"],
+  variable: "--font-display",
+  weight: ["400", "500", "600", "700"],
+});
+
+const bodyFont = Space_Grotesk({
+  subsets: ["latin"],
+  variable: "--font-body",
+});
 
 export const metadata: Metadata = {
   title: "CumbiaGuess",
@@ -15,5 +24,11 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
-  return (<html lang="es"><body className={outfit.className}>{children}</body></html>);
+  return (
+    <html lang="es" suppressHydrationWarning>
+      <body className={`${displayFont.variable} ${bodyFont.variable}`}>
+        <ThemeProvider>{children}</ThemeProvider>
+      </body>
+    </html>
+  );
 }

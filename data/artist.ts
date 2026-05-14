@@ -3,6 +3,7 @@ export interface Artist {
   name: string;
   genre: string;
   formationYear: number; // El año de tu lista (cuando se formó o explotó)
+  aliases?: string[];
 }
 
 // El formato es importante: Nombre, renglón, "Género: ...", renglón, "Año: ...", renglón, Puntaje
@@ -1131,3 +1132,8 @@ export const getArtists = (): Artist[] => {
 
 // Exportamos la lista limpia
 export const ARTISTS = getArtists();
+
+const rodrigo = ARTISTS.find((artist) => artist.name === 'Rodrigo');
+if (rodrigo) {
+  rodrigo.aliases = ['Rodrigo Bueno', 'El Potro Rodrigo', 'Rodrigo Bueno (El Potro)'];
+}

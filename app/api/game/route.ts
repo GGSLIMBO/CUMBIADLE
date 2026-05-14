@@ -1,18 +1,27 @@
 import { NextResponse } from 'next/server';
 import { ARTISTS } from '@/data/artist';
 import { FALLBACK_SONGS } from '@/data/fallbackPool';
+import { findArtistByNameOrAlias, getArtistSearchTerms, matchesArtistName } from '@/data/artistMatch';
 
 interface DeezerSong {
   id: number;
   title: string;
   preview: string;
-  artist: {
-    name: string;
+  artist: { name: string };
+  album: { cover_medium: string; release_date: string };
+}
+
+interface GameResponse {
+  gameData: { previewUrl: string; deezerId: number; date: string };
+  solution: {
+    title: string;
+    artist: string;
+    albumCover: string;
+    albumYear: string;
+    genre: string;
+    formationYear?: number | null;
   };
-  album: {
-    cover_medium: string;
-    release_date: string;
-  };
+  _note?: string;
 }
 
 // Función para generar un número "aleatorio" pero fijo según la fecha (Seed)
@@ -29,112 +38,161 @@ function getSeededIndex(seed: string, max: number) {
 // Simple in-memory cache for the daily response (keyed by date)
 const gameCache = new Map<string, { expires: number; payload: any }>();
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
-    // 1. OBTENER FECHA ACTUAL (Zona Horaria Argentina)
-    const now = new Date();
-    const argentinaTime = new Intl.DateTimeFormat("es-AR", {
-      timeZone: "America/Argentina/Buenos_Aires",
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit'
-    }).format(now); 
-    // argentinaTime será algo como "18/02/2026"
+    const url = new URL(request.url);
+    const mode = (url.searchParams.get('mode') || 'daily') as ('daily'|'infinite'|'one_life'|'artist');
+    const artistParam = url.searchParams.get('artist') || undefined;
 
-    // 2. SELECCIONAR ARTISTA BASADO EN LA FECHA
-    // Usamos la fecha como semilla para elegir el índice del array
-    const artistIndex = getSeededIndex(argentinaTime, ARTISTS.length);
-    const dailyArtist = ARTISTS[artistIndex];
+    // Use a stable ISO date (YYYY-MM-DD) in Argentina timezone as seed
+    const argentinaTime = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' });
 
-    // If we already have a cached payload for today, return it
-    const cached = gameCache.get(argentinaTime);
+    // Build cache key including mode and artist if present
+    const cacheKey = mode === 'daily' ? `daily:${argentinaTime}` : mode === 'artist' && artistParam ? `artist:${artistParam}` : `${mode}:${argentinaTime}`;
+    const cached = gameCache.get(cacheKey);
     if (cached && cached.expires > Date.now()) {
       return NextResponse.json(cached.payload);
     }
 
-    if (!dailyArtist) {
-      return NextResponse.json({ error: "Error seleccionando artista diario" }, { status: 500 });
-    }
+    // Helper to fetch songs for an artist name
+    const fetchSongsForArtist = async (artistName: string) => {
+      const artistProfile = findArtistByNameOrAlias(artistName, ARTISTS) ?? ARTISTS.find((artist) => artist.name === artistName) ?? null;
+      const searchContext = artistProfile?.genre.toLowerCase().includes('cuarteto') ? 'cuarteto' : 'cumbia';
+      const searchTerms = artistProfile ? getArtistSearchTerms(artistProfile) : [artistName];
 
-    // 3. BUSCAR EN DEEZER
-    // Usamos la lógica de contexto que ya teníamos (Cumbia/Cuarteto)
-    const searchContext = dailyArtist.genre.toLowerCase().includes("cuarteto") 
-      ? "cuarteto" 
-      : "cumbia";
+      try {
+        const resultsById = new Map<number, DeezerSong>();
 
-    const query = `artist:"${dailyArtist.name}" ${searchContext}`;
-    
-    // IMPORTANTE: Agregamos cache para no reventar a Deezer si entran muchos usuarios
-    // revalidate: 3600 significa que Next.js guarda la respuesta de Deezer por 1 hora.
-    // Intentar obtener resultados desde Deezer con reintentos sencillos
-    let validSongs: DeezerSong[] = [];
-    try {
-      const deezerResponse = await fetch(`https://api.deezer.com/search?q=${encodeURIComponent(query)}`, { next: { revalidate: 3600 } });
-      const data = await deezerResponse.json();
-      validSongs = data.data?.filter((s: DeezerSong) => s.preview) || [];
+        for (const term of searchTerms) {
+          const query = `artist:"${term}" ${searchContext}`;
+          const deezerResponse = await fetch(`https://api.deezer.com/search?q=${encodeURIComponent(query)}&limit=20`, { next: { revalidate: 3600 } });
+          const data = await deezerResponse.json();
+          const tracks = data.data?.filter((s: DeezerSong) => s.preview) || [];
+          for (const track of tracks) {
+            if (!artistProfile || matchesArtistName(track.artist.name, artistProfile)) {
+              resultsById.set(track.id, track);
+            }
+          }
+        }
 
-      if (validSongs.length === 0) {
-        const fallbackRes = await fetch(`https://api.deezer.com/search?q=artist:"${encodeURIComponent(dailyArtist.name)}"`, { next: { revalidate: 3600 } });
-        const fallbackData = await fallbackRes.json();
-        validSongs = fallbackData.data?.filter((s: DeezerSong) => s.preview) || [];
-      }
-    } catch (err) {
-      // Deezer request failed — we'll fallback below
-      console.error('Deezer error:', err);
-    }
+        let songs = Array.from(resultsById.values());
+        if (songs.length === 0) {
+          const fallbackRes = await fetch(`https://api.deezer.com/search?q=artist:"${encodeURIComponent(artistName)}"`, { next: { revalidate: 3600 } });
+          const fallbackData = await fallbackRes.json();
+          songs = fallbackData.data?.filter((s: DeezerSong) => s.preview && (!artistProfile || matchesArtistName(s.artist.name, artistProfile))) || [];
+        }
 
-    let payload: any;
-
-    if (validSongs.length === 0) {
-      // Fallback a pool local si Deezer no devolvió previews
-      const fallbackIndex = getSeededIndex(argentinaTime + dailyArtist.name, FALLBACK_SONGS.length);
-      const fallbackSong = FALLBACK_SONGS[fallbackIndex];
-
-      payload = {
-        gameData: {
-          previewUrl: fallbackSong.previewUrl || '',
-          deezerId: fallbackSong.deezerId || 0,
-          date: argentinaTime,
-        },
-        solution: {
-          title: fallbackSong.title,
-          artist: fallbackSong.artist,
-          albumCover: fallbackSong.albumCover || '',
-          albumYear: fallbackSong.albumYear || '',
-          genre: dailyArtist.genre,
-          formationYear: dailyArtist.formationYear,
-        },
-        _note: 'fallback'
-      };
-
-      // Cache breve
-      gameCache.set(argentinaTime, { expires: Date.now() + 1000 * 60 * 60, payload });
-      return NextResponse.json(payload);
-    }
-
-    // 4. SELECCIONAR CANCIÓN (TAMBIÉN BASADO EN LA FECHA)
-    const songIndex = getSeededIndex(argentinaTime + dailyArtist.name, validSongs.length);
-    const song = validSongs[songIndex];
-
-    payload = {
-      gameData: {
-        previewUrl: song.preview,
-        deezerId: song.id,
-        date: argentinaTime,
-      },
-      solution: {
-        title: song.title,
-        artist: song.artist.name,
-        albumCover: song.album.cover_medium,
-        albumYear: song.album.release_date,
-        genre: dailyArtist.genre,
-        formationYear: dailyArtist.formationYear,
+        return songs;
+      } catch (err) {
+        console.error('Deezer error:', err);
+        return [] as DeezerSong[];
       }
     };
 
-    // Cache la respuesta del día por 1 hora
-    gameCache.set(argentinaTime, { expires: Date.now() + 1000 * 60 * 60, payload });
+    let selectedArtist = null as (typeof ARTISTS[number]) | null;
+    let validSongs: DeezerSong[] = [];
+    let payload: any = null;
 
+    if (mode === 'daily') {
+      const artistIndex = getSeededIndex(argentinaTime, ARTISTS.length);
+      selectedArtist = ARTISTS[artistIndex];
+      validSongs = await fetchSongsForArtist(selectedArtist.name);
+      if (validSongs.length === 0) {
+        const fallbackIndex = getSeededIndex(argentinaTime + selectedArtist.name, FALLBACK_SONGS.length);
+        const fallbackSong = FALLBACK_SONGS[fallbackIndex];
+        payload = {
+          gameData: { previewUrl: fallbackSong.previewUrl || '', deezerId: fallbackSong.deezerId || 0, date: argentinaTime },
+          solution: { title: fallbackSong.title, artist: fallbackSong.artist, albumCover: fallbackSong.albumCover || '', albumYear: fallbackSong.albumYear || '', genre: selectedArtist.genre, formationYear: selectedArtist.formationYear },
+          _note: 'fallback',
+          mode: 'daily',
+          maxAttempts: 6,
+          fullPreviewAllowed: false,
+          modeMeta: { artistId: selectedArtist.id, artistName: selectedArtist.name }
+        };
+        gameCache.set(cacheKey, { expires: Date.now() + 1000 * 60 * 60, payload });
+        return NextResponse.json(payload);
+      }
+      const songIndex = getSeededIndex(argentinaTime + selectedArtist.name, validSongs.length);
+      const song = validSongs[songIndex];
+      payload = {
+        gameData: { previewUrl: song.preview, deezerId: song.id, date: argentinaTime },
+        solution: { title: song.title, artist: song.artist.name, albumCover: song.album.cover_medium, albumYear: song.album.release_date, genre: selectedArtist.genre, formationYear: selectedArtist.formationYear },
+        mode: 'daily',
+        maxAttempts: 6,
+        fullPreviewAllowed: false,
+        modeMeta: { artistId: selectedArtist.id, artistName: selectedArtist.name }
+      };
+      gameCache.set(cacheKey, { expires: Date.now() + 1000 * 60 * 60, payload });
+      return NextResponse.json(payload);
+    }
+
+    // artist mode requires artistParam
+    if (mode === 'artist') {
+      if (!artistParam) return NextResponse.json({ error: 'artist param required' }, { status: 400 });
+      // Try to find by id or name
+      const byId = Number.isFinite(Number(artistParam)) ? ARTISTS.find(a => a.id === Number(artistParam)) : null;
+      const byName = findArtistByNameOrAlias(artistParam, ARTISTS) || null;
+      selectedArtist = byId || byName;
+      if (!selectedArtist) return NextResponse.json({ error: 'artist not found' }, { status: 404 });
+      validSongs = await fetchSongsForArtist(selectedArtist.name);
+      if (validSongs.length === 0) {
+        // fallback
+        const fallbackIndex = getSeededIndex(selectedArtist.name, FALLBACK_SONGS.length);
+        const fallbackSong = FALLBACK_SONGS[fallbackIndex];
+        payload = {
+          gameData: { previewUrl: fallbackSong.previewUrl || '', deezerId: fallbackSong.deezerId || 0, date: argentinaTime },
+          solution: { title: fallbackSong.title, artist: fallbackSong.artist, albumCover: fallbackSong.albumCover || '', albumYear: fallbackSong.albumYear || '', genre: selectedArtist.genre, formationYear: selectedArtist.formationYear },
+          _note: 'fallback',
+          mode: 'artist',
+          maxAttempts: 6,
+          fullPreviewAllowed: false,
+          modeMeta: { artistId: selectedArtist.id, artistName: selectedArtist.name }
+        };
+        gameCache.set(cacheKey, { expires: Date.now() + 1000 * 30, payload });
+        return NextResponse.json(payload);
+      }
+      const song = validSongs[Math.floor(Math.random() * validSongs.length)];
+      payload = {
+        gameData: { previewUrl: song.preview, deezerId: song.id, date: argentinaTime },
+        solution: { title: song.title, artist: song.artist.name, albumCover: song.album.cover_medium, albumYear: song.album.release_date, genre: selectedArtist.genre, formationYear: selectedArtist.formationYear },
+        mode: 'artist',
+        maxAttempts: 6,
+        fullPreviewAllowed: false,
+        modeMeta: { artistId: selectedArtist.id, artistName: selectedArtist.name }
+      };
+      gameCache.set(cacheKey, { expires: Date.now() + 1000 * 60 * 5, payload });
+      return NextResponse.json(payload);
+    }
+
+    // infinite and one_life modes - pick a random artist and song
+    const randomArtist = ARTISTS[Math.floor(Math.random() * ARTISTS.length)];
+    validSongs = await fetchSongsForArtist(randomArtist.name);
+    if (validSongs.length === 0) {
+      // fallback to local pool random
+      const fallbackSong = FALLBACK_SONGS[Math.floor(Math.random() * FALLBACK_SONGS.length)];
+      payload = {
+        gameData: { previewUrl: fallbackSong.previewUrl || '', deezerId: fallbackSong.deezerId || 0, date: argentinaTime },
+        solution: { title: fallbackSong.title, artist: fallbackSong.artist, albumCover: fallbackSong.albumCover || '', albumYear: fallbackSong.albumYear || '', genre: randomArtist.genre, formationYear: randomArtist.formationYear },
+        mode,
+        maxAttempts: mode === 'one_life' ? 1 : 6,
+        fullPreviewAllowed: mode === 'one_life',
+        modeMeta: { artistId: randomArtist.id, artistName: randomArtist.name }
+      };
+      gameCache.set(cacheKey, { expires: Date.now() + 1000 * 30, payload });
+      return NextResponse.json(payload);
+    }
+
+    const randomSong = validSongs[Math.floor(Math.random() * validSongs.length)];
+    payload = {
+      gameData: { previewUrl: randomSong.preview, deezerId: randomSong.id, date: argentinaTime },
+      solution: { title: randomSong.title, artist: randomSong.artist.name, albumCover: randomSong.album.cover_medium, albumYear: randomSong.album.release_date, genre: randomArtist.genre, formationYear: randomArtist.formationYear },
+      mode,
+      maxAttempts: mode === 'one_life' ? 1 : 6,
+      fullPreviewAllowed: mode === 'one_life',
+      modeMeta: { artistId: randomArtist.id, artistName: randomArtist.name }
+    };
+    // short cache for non-daily modes
+    gameCache.set(cacheKey, { expires: Date.now() + 1000 * 30, payload });
     return NextResponse.json(payload);
 
   } catch (error) {

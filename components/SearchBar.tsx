@@ -1,6 +1,6 @@
 "use client";
-import { useState, useEffect } from "react";
-import { Search } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
+import { Search, Loader2 } from "lucide-react";
 
 type Track = {
   id: number;
@@ -14,42 +14,87 @@ export default function SearchBar({ onGuess, disabled }: { onGuess: (t: Track) =
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<Track[]>([]);
   const [isSearching, setIsSearching] = useState(false);
+  const controllerRef = useRef<AbortController | null>(null);
 
   // Efecto "Debounce": Espera a que dejes de escribir para buscar (ahorra peticiones)
   useEffect(() => {
-    const delayDebounceFn = setTimeout(async () => {
-      if (query.length >= 2) {
-        setIsSearching(true);
-        const res = await fetch(`/api/search?q=${query}`);
-        const data = await res.json();
-        setResults(data);
-        setIsSearching(false);
-      } else {
-        setResults([]);
-      }
-    }, 500); // Espera 500ms
+    const delay = 500;
+    const timer = setTimeout(() => {
+      (async () => {
+        if (query.length < 2) {
+          setResults([]);
+          return;
+        }
 
-    return () => clearTimeout(delayDebounceFn);
+        // Abort previous request
+        controllerRef.current?.abort();
+        const controller = new AbortController();
+        controllerRef.current = controller;
+
+        setIsSearching(true);
+        try {
+          const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`, { signal: controller.signal });
+          if (!res.ok) {
+            setResults([]);
+            setIsSearching(false);
+            return;
+          }
+          const data = await res.json();
+          setResults(data);
+        } catch (err: any) {
+          if (err.name === 'AbortError') return; // ignore aborted
+          console.error('Search error', err);
+        } finally {
+          setIsSearching(false);
+        }
+      })();
+    }, delay);
+
+    return () => {
+      clearTimeout(timer);
+      // Do not abort here to allow in-flight fetch to finish when unmounting is not intended
+    };
   }, [query]);
 
+  useEffect(() => {
+    return () => {
+      controllerRef.current?.abort();
+    };
+  }, []);
+
   return (
-    <div className="relative w-full max-w-md mt-6 z-50">
+    <div className="relative w-full max-w-md z-50">
       {/* INPUT */}
       <div className="relative">
         <input
           type="text"
           placeholder={disabled ? "Juego terminado" : "Buscar canción o artista..."}
-          className="w-full p-4 pl-12 rounded-lg bg-neutral-800 text-white border border-neutral-600 focus:border-green-500 outline-none placeholder-gray-500 disabled:opacity-50"
+          className="w-full rounded-2xl border px-4 py-4 pl-12 text-sm outline-none transition-all duration-300 placeholder:text-[color:var(--muted)] disabled:opacity-50"
+          style={{
+            background: "var(--surface-strong)",
+            color: "var(--foreground)",
+            borderColor: "var(--border)",
+            boxShadow: "var(--shadow)",
+          }}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           disabled={disabled}
         />
-        <Search className="absolute left-4 top-4 text-gray-400" size={20} />
+        <Search className="absolute left-4 top-4 text-[color:var(--muted)]" size={18} />
+        {isSearching && (
+          <Loader2 className="absolute right-4 top-4 animate-spin text-[color:var(--muted)]" size={18} />
+        )}
       </div>
 
       {/* LISTA DE RESULTADOS */}
       {results.length > 0 && !disabled && (
-        <ul className="absolute w-full bg-neutral-800 border border-neutral-700 rounded-lg mt-2 shadow-2xl max-h-60 overflow-y-auto z-50">
+        <ul className="absolute mt-3 w-full overflow-y-auto rounded-3xl border z-50 max-h-72"
+          style={{
+            background: "var(--surface-strong)",
+            borderColor: "var(--border)",
+            boxShadow: "var(--shadow)",
+          }}
+        >
           {results.map((track) => (
             <li 
               key={track.id}
@@ -58,12 +103,13 @@ export default function SearchBar({ onGuess, disabled }: { onGuess: (t: Track) =
                 setQuery(""); // Limpiar input
                 setResults([]); // Cerrar lista
               }}
-              className="p-3 hover:bg-neutral-700 cursor-pointer flex items-center gap-3 transition-colors border-b border-neutral-700 last:border-0"
+              className="flex cursor-pointer items-center gap-3 border-b px-4 py-3 transition-colors last:border-0 hover:bg-black/5 dark:hover:bg-white/5"
+              style={{ borderColor: "var(--border)" }}
             >
-              <img src={track.cover} alt="cover" className="w-10 h-10 rounded" />
+              <img src={track.cover} alt="cover" className="h-11 w-11 rounded-xl object-cover shadow-sm" />
               <div className="text-left">
-                <p className="font-bold text-sm text-white">{track.title}</p>
-                <p className="text-xs text-gray-400">{track.artist}</p>
+                <p className="text-sm font-semibold" style={{ color: "var(--foreground)" }}>{track.title}</p>
+                <p className="text-xs" style={{ color: "var(--muted)" }}>{track.artist}</p>
               </div>
             </li>
           ))}

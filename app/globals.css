@@ -1,8 +1,41 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #f7f0e8;
+  --foreground: #201814;
+  --surface: rgba(255, 250, 245, 0.72);
+  --surface-strong: rgba(255, 252, 249, 0.94);
+  --surface-soft: rgba(255, 255, 255, 0.58);
+  --border: rgba(56, 35, 28, 0.08);
+  --muted: rgba(56, 35, 28, 0.62);
+  --muted-strong: rgba(56, 35, 28, 0.82);
+  --accent: #c84b31;
+  --accent-2: #d9a441;
+  --accent-3: #7a3e57;
+  --shadow: 0 24px 80px rgba(80, 52, 39, 0.12);
+  --body-gradient:
+    radial-gradient(circle at top left, rgba(201, 75, 49, 0.14), transparent 30%),
+    radial-gradient(circle at top right, rgba(122, 62, 87, 0.12), transparent 28%),
+    linear-gradient(180deg, #fffaf5 0%, #f7f0e8 100%);
+}
+
+[data-theme='dark'] {
+  --background: #100b11;
+  --foreground: #f7efe8;
+  --surface: rgba(22, 17, 24, 0.72);
+  --surface-strong: rgba(24, 19, 26, 0.94);
+  --surface-soft: rgba(255, 255, 255, 0.06);
+  --border: rgba(255, 255, 255, 0.1);
+  --muted: rgba(247, 239, 232, 0.66);
+  --muted-strong: rgba(247, 239, 232, 0.84);
+  --accent: #e76f51;
+  --accent-2: #f4b942;
+  --accent-3: #a85572;
+  --shadow: 0 28px 90px rgba(0, 0, 0, 0.44);
+  --body-gradient:
+    radial-gradient(circle at top left, rgba(231, 111, 81, 0.15), transparent 28%),
+    radial-gradient(circle at top right, rgba(168, 85, 114, 0.12), transparent 30%),
+    linear-gradient(180deg, #130d14 0%, #100b11 100%);
 }
 
 @theme inline {
@@ -12,15 +45,121 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--background);
+  color: var(--foreground);
+  scroll-behavior: smooth;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-body), sans-serif;
+  min-height: 100vh;
+  background-image: var(--body-gradient);
+}
+
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background-image: linear-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
+  background-size: 44px 44px;
+  mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.55), transparent 90%);
+  opacity: 0.18;
+}
+
+.app-shell {
+  position: relative;
+  isolation: isolate;
+}
+
+.app-shell::before,
+.app-shell::after {
+  content: '';
+  position: absolute;
+  inset: auto;
+  border-radius: 999px;
+  filter: blur(42px);
+  opacity: 0.55;
+  z-index: -1;
+}
+
+.app-shell::before {
+  width: 260px;
+  height: 260px;
+  top: -40px;
+  right: -40px;
+  background: radial-gradient(circle, color-mix(in srgb, var(--accent) 65%, transparent), transparent 70%);
+}
+
+.app-shell::after {
+  width: 220px;
+  height: 220px;
+  bottom: 60px;
+  left: -50px;
+  background: radial-gradient(circle, color-mix(in srgb, var(--accent-3) 55%, transparent), transparent 70%);
+}
+
+.glass-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(18px);
+}
+
+.glass-panel-strong {
+  background: var(--surface-strong);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(20px);
+}
+
+.surface-soft {
+  background: var(--surface-soft);
+  border: 1px solid var(--border);
+}
+
+.text-muted {
+  color: var(--muted);
+}
+
+.text-muted-strong {
+  color: var(--muted-strong);
+}
+
+.accent-gradient {
+  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-2) 52%, var(--accent-3) 100%);
+}
+
+.accent-gradient-text {
+  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-2) 52%, var(--accent-3) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.mode-chip {
+  border: 1px solid var(--border);
+  background: var(--surface-soft);
+  color: var(--foreground);
+}
+
+.mode-chip-active {
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 36%, transparent), color-mix(in srgb, var(--accent-3) 28%, transparent));
+  border-color: color-mix(in srgb, var(--accent) 40%, white 12%);
+}
+
+h1,
+h2,
+h3,
+.display-copy {
+  font-family: var(--font-display), serif;
+  letter-spacing: -0.03em;
 }
